@@ -1,0 +1,43 @@
+import { auth } from "@/lib/auth";
+import { getSafeCallbackPath, SIGN_IN_PATH } from "./index";
+import { type NextRequest, NextResponse } from "next/server";
+
+function redirectToSignIn(request: NextRequest, pathname: string) {
+  const signInUrl = new URL(SIGN_IN_PATH, request.url);
+  signInUrl.searchParams.set(
+    "callback",
+    `${pathname}${request.nextUrl.search}`,
+  );
+
+  return NextResponse.redirect(signInUrl);
+}
+
+function getPostAuthRedirectPath(request: NextRequest): string {
+  const callback = request.nextUrl.searchParams.get("callback");
+  return getSafeCallbackPath(callback);
+}
+
+export async function handleAuthProxy(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+
+  if (pathname === "/") return NextResponse.next();
+
+  const session = await auth.api.getSession({
+    headers: request.headers,
+  });
+
+  if (pathname === SIGN_IN_PATH) {
+    if (session) {
+      const redirectPath = getPostAuthRedirectPath(request);
+      return NextResponse.redirect(new URL(redirectPath, request.url));
+    }
+
+    NextResponse.next();
+  }
+
+  if (!session) {
+    return redirectToSignIn(request, pathname);
+  }
+
+  return NextResponse.next();
+}
