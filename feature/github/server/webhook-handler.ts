@@ -1,3 +1,4 @@
+import { inngest } from "../../inngest/client";
 import { savePullRequest } from "../../reviews/server/save-pull-request";
 import { getGithubApp } from "../utils/github-app";
 
@@ -52,8 +53,10 @@ export async function handleGithubWebhook(request: Request) {
 
   const pullRequest = await savePullRequest(event);
 
-  // todo: Map github installation id
-  // todo: TriggerReviewJob
+  await inngest.send({
+    name: "github/pr.received",
+    data: { pullRequestId: pullRequest.id },
+  });
 
   return Response.json({ received: true });
 }
