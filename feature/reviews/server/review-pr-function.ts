@@ -4,6 +4,12 @@ import { formatPrFilesForReview, getPullRequestFiles } from "./pr-files";
 import { chunkPrFiles } from "../utils/chunk-code";
 import { generateReview } from "./generate-review";
 import { postPrComment } from "./post-pr-comment";
+import {
+  buildPrNamespace,
+  saveChunksToPinecone,
+  searchPrContext,
+} from "./vector";
+import { buildRepoNamespace } from "../../repo-sync/server/repo-sync";
 
 export const reviewPullRequest = inngest.createFunction(
   { id: "review-pull-request", triggers: { event: "github/pr.received" } },
@@ -19,19 +25,18 @@ export const reviewPullRequest = inngest.createFunction(
       });
     });
 
-    const diff = await step.run("fetch-pr-diff", async () => {
+    const chunks = await step.run("breakdown-code", async () => {
       const files = await getPullRequestFiles(
         pullRequest.installationId,
         pullRequest.repoFullName,
         pullRequest.prNumber,
       );
 
-      return formatPrFilesForReview(files);
+      return chunkPrFiles(pullRequest.prNumber, files);
     });
 
-
-    if (!diff.trim()) {
-      await step.run("mark-reviewed-no-code", async () => {
+    if (chunks.length === 0) {
+      await step.run("marked-review-no-code", async () => {
         await prisma.pullRequest.update({
           where: { id: pullRequestId },
           data: { status: "reviewed" },
@@ -41,12 +46,45 @@ export const reviewPullRequest = inngest.createFunction(
       return { pullRequestId, status: "reviewed", reason: "no code to review" };
     }
 
+    // PR namespace isolates this diff other PRs from repo-wide sync data
+    const namespace = buildPrNamespace(
+      pullRequest.repoFullName,
+      pullRequest.prNumber,
+    );
+
+    await step.run("save-vectors-to-pinecone", async () => {
+      await saveChunksToPinecone(namespace, chunks);
+    });
+
+    await step.sleep("wait-for-vectos-to-index", "10s");
+
+    const repoContextSnippets = await step.run(
+      "search-repo-context",
+      async () => {
+        const repoSync = await prisma.repoSync.findUnique({
+          where: { repoFullName: pullRequest.repoFullName },
+        });
+
+        if (!repoSync || repoSync.status !== "synced") {
+          return [];
+        }
+
+        const repoNamespace = buildRepoNamespace(pullRequest.repoFullName);
+        return searchPrContext(repoNamespace, pullRequest.title);
+      },
+    );
 
     const review = await step.run("generate-ai-review", async () => {
+      const contextSnippets = await searchPrContext(
+        namespace,
+        pullRequest.title,
+      );
+
       return generateReview({
         repoFullName: pullRequest.repoFullName,
         title: pullRequest.title,
-        diff
+        contextSnippets,
+        repoContextSnippets,
       });
     });
 

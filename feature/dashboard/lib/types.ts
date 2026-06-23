@@ -13,7 +13,7 @@ export type DashboardRepo = {
   fullName: string;
   visibility: RespoVisibility;
   defaultBranch: string;
-  updateAt: string;
+  updatedAt: string;
   language: string | null;
   stars: number;
   syncStatus: RepoSyncStatus | null;
