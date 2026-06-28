@@ -1,13 +1,16 @@
+import { prisma } from "@/lib/db";
+import { canUserReview } from "../../billing/server/usage";
 import { inngest } from "../../inngest/client";
 import { savePullRequest } from "../../reviews/server/save-pull-request";
 import { getGithubApp } from "../utils/github-app";
+import { getUserIdByInstallationId } from "./installation";
 
 const REVIEWABLE_ACTIONS = ["opened", "synchronize", "reopened"];
 
 export type PullRequestWebhookPayload = {
-  // Webhook acton e.g. "opened", "synchronize", "reopened"
+  /** Webhook action, e.g. `opened`, `synchronize`, `reopened` */
   action: string;
-  // Github app installation that received the event
+  /** GitHub App installation that received the event */
   installation: { id: number };
   repository: { full_name: string };
   pull_request: {
@@ -25,6 +28,7 @@ async function isSignatureValid(payload: string, signature: string | null) {
   }
 
   const app = getGithubApp();
+  // Octokit wraps GitHub's webhook crypto — rejects forged payloads.
   return app.webhooks.verify(payload, signature);
 }
 
@@ -36,7 +40,7 @@ export async function handleGithubWebhook(request: Request) {
   const isValid = await isSignatureValid(payload, signature);
 
   if (!isValid) {
-    return Response.json({ error: "Invalid Signature" }, { status: 401 });
+    return Response.json({ error: "Invalid signature" }, { status: 401 });
   }
 
   if (eventName !== "pull_request") {
@@ -45,13 +49,30 @@ export async function handleGithubWebhook(request: Request) {
 
   const event = JSON.parse(payload) as PullRequestWebhookPayload;
 
-  console.log("event: ", event);
+  console.log("event", event);
 
   if (!REVIEWABLE_ACTIONS.includes(event.action)) {
     return Response.json({ received: true });
   }
 
   const pullRequest = await savePullRequest(event);
+
+  const userId = await getUserIdByInstallationId(event.installation.id);
+
+  if (userId) {
+    const allowed = await canUserReview(userId);
+    if (!allowed) {
+      await prisma.pullRequest.update({
+        where: {
+          id: pullRequest.id,
+        },
+        data: {
+          status: "rate_limited",
+        },
+      });
+      return Response.json({ received: true, rateLimited: true });
+    }
+  }
 
   await inngest.send({
     name: "github/pr.received",

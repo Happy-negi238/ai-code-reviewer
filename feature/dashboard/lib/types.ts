@@ -20,7 +20,7 @@ export type DashboardRepo = {
 };
 
 /**
- * Wheather a github app has installed and on which account 
+ * Wheather a github app has installed and on which account
  * accountLogin is the github username or org name the app was installed for
  */
 export type GithubInstallationStatus = {
@@ -33,3 +33,14 @@ export type GithubInstallationStatus = {
  * which is currently user use
  */
 export type SubscriptionPlan = "free" | "pro";
+
+/**
+ * The user's current subscription state, used on the Settings page
+ * and in the sidebar user menu badge.
+ */
+export type UserSubscription = {
+  plan: SubscriptionPlan;
+  status: "active" | "canceled" | "trialing";
+  renewsAt: string | null;
+};
+
